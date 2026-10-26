@@ -212,6 +212,80 @@ d('A2 reviews + agents (Testcontainers pg)', () => {
     await app.close();
   });
 
+  it('run cost: persisted per run, surfaced in runs + trace, summed per PR on the list', async () => {
+    const app = await appWith(REVIEW_FIXTURE);
+    const { repo, pr } = await setupRepoAndPr(pg.handle.db, workspaceId);
+    const agent = (
+      await app.inject({
+        method: 'POST',
+        url: '/agents',
+        payload: { name: 'Cost', provider: 'openai', model: 'gpt-4.1', system_prompt: 'c' },
+      })
+    ).json();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/pulls/${pr.id}/review`,
+      payload: { agentId: agent.id },
+    });
+    const runId = res.json().runs[0].run_id;
+    await waitForPrRuns(pg.handle.db, pr.id, { expected: 1 });
+
+    // Single-file diff → single-pass → one mock LLM call at $0.001 (no extra calls for cost).
+    const [run] = await pg.handle.db.select().from(t.agentRuns).where(eq(t.agentRuns.id, runId));
+    expect(run!.status).toBe('done');
+    expect(run!.costUsd).toBeCloseTo(0.001, 10);
+
+    const trace = (await app.inject({ method: 'GET', url: `/runs/${runId}/trace` })).json();
+    expect(trace.stats.cost_usd).toBeCloseTo(0.001, 10);
+
+    const runs = (await app.inject({ method: 'GET', url: `/pulls/${pr.id}/runs` })).json();
+    expect(runs[0].cost_usd).toBeCloseTo(0.001, 10);
+
+    // Two more runs on the same PR: one priced, one unknown (null is skipped by SUM).
+    await pg.handle.db.insert(t.agentRuns).values([
+      { workspaceId, prId: pr.id, status: 'done', costUsd: 0.002 },
+      { workspaceId, prId: pr.id, status: 'failed', costUsd: null },
+    ]);
+
+    // A second PR whose only run has no known cost, and a third with no runs.
+    const [unpriced] = await pg.handle.db
+      .insert(t.pullRequests)
+      .values({ ...prValues(repo.id), number: 483 })
+      .returning();
+    await pg.handle.db
+      .insert(t.agentRuns)
+      .values({ workspaceId, prId: unpriced!.id, status: 'done', costUsd: null });
+    await pg.handle.db.insert(t.pullRequests).values({ ...prValues(repo.id), number: 484 });
+
+    const list = (await app.inject({ method: 'GET', url: `/repos/${repo.id}/pulls` })).json() as Array<{
+      number: number;
+      cost_usd: number | null;
+    }>;
+    const costOf = (n: number) => list.find((p) => p.number === n)!.cost_usd;
+    expect(costOf(482)).toBeCloseTo(0.003, 10);
+    expect(costOf(483)).toBeNull(); // all runs unknown → "—", never $0
+    expect(costOf(484)).toBeNull(); // never reviewed
+
+    await app.close();
+
+    function prValues(repoId: string) {
+      return {
+        workspaceId,
+        repoId,
+        title: 'x',
+        author: 'a',
+        branch: 'b',
+        base: 'main',
+        headSha: 'sha',
+        additions: 0,
+        deletions: 0,
+        filesCount: 0,
+        status: 'open',
+      };
+    }
+  });
+
   it('dual-provider structured output: anthropic provider returns the same Review shape', async () => {
     const app = await appWith(REVIEW_FIXTURE, 'anthropic');
     const { pr } = await setupRepoAndPr(pg.handle.db, workspaceId);
