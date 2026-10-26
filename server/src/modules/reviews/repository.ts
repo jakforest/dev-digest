@@ -155,6 +155,8 @@ export class ReviewRepository {
       durationMs: number;
       tokensIn: number;
       tokensOut: number;
+      /** Run cost in USD; null/omitted = unknown (unpriced model, failed/cancelled run). */
+      costUsd?: number | null;
       findingsCount: number;
       grounding: string;
       /** Review score (0-100); null on failed/cancelled runs. */

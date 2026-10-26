@@ -12,9 +12,11 @@ import {
   EvalRun,
   MemoryItem,
   RunTrace,
+  RunSummary,
   Settings,
   Repo,
   PrDetail,
+  PrMeta,
 } from '@devdigest/shared';
 
 /**
@@ -166,6 +168,44 @@ describe('AI contracts parse fixtures', () => {
       log: [{ t: '00.00', kind: 'info', msg: 'started' }],
     });
     expect(trace.tool_calls).toHaveLength(1);
+    // Traces stored before cost was tracked have no cost_usd key — still valid.
+    expect(trace.stats.cost_usd).toBeUndefined();
+  });
+
+  it('run cost: RunStats carries cost_usd; RunSummary requires it (nullable)', () => {
+    const stats = { duration_ms: 8200, tokens_in: 14820, tokens_out: 1240, findings: 3, grounding: '3/3 passed' };
+    const base = {
+      config: { agent: 'Security Reviewer', model: 'gpt-4.1' },
+      prompt_assembly: { system: 's', user: 'u' },
+      tool_calls: [],
+      raw_output: '{}',
+      memory_pulled: [],
+      specs_read: [],
+      log: [],
+    };
+    expect(RunTrace.parse({ ...base, stats: { ...stats, cost_usd: 0.06 } }).stats.cost_usd).toBe(0.06);
+    expect(RunTrace.parse({ ...base, stats: { ...stats, cost_usd: null } }).stats.cost_usd).toBeNull();
+
+    const summary = {
+      run_id: 'r1',
+      agent_id: null,
+      agent_name: 'Security Reviewer',
+      provider: 'openrouter',
+      model: 'deepseek-v4-flash',
+      status: 'done',
+      error: null,
+      duration_ms: 8200,
+      tokens_in: 8000,
+      tokens_out: 1119,
+      findings_count: 3,
+      grounding: '3/3 passed',
+      ran_at: null,
+      score: 38,
+      blockers: 2,
+    };
+    expect(RunSummary.parse({ ...summary, cost_usd: 0.0013 }).cost_usd).toBe(0.0013);
+    expect(RunSummary.parse({ ...summary, cost_usd: null }).cost_usd).toBeNull();
+    expect(() => RunSummary.parse(summary)).toThrow();
   });
 });
 
@@ -206,5 +246,23 @@ describe('platform DTOs', () => {
         commits: [],
       }),
     ).not.toThrow();
+  });
+
+  it('PrMeta: cost_usd is optional (list endpoint only)', () => {
+    const pr = {
+      number: 482,
+      title: 't',
+      author: 'a',
+      branch: 'b',
+      base: 'main',
+      head_sha: 'sha',
+      additions: 1,
+      deletions: 0,
+      files_count: 1,
+      status: 'needs_review',
+    };
+    expect(PrMeta.parse(pr).cost_usd).toBeUndefined();
+    expect(PrMeta.parse({ ...pr, cost_usd: null }).cost_usd).toBeNull();
+    expect(PrMeta.parse({ ...pr, cost_usd: 0.014 }).cost_usd).toBe(0.014);
   });
 });

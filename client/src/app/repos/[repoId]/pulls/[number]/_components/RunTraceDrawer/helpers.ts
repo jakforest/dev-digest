@@ -1,5 +1,6 @@
 import type { LogLine } from "@devdigest/ui";
 import type { RunTrace } from "@devdigest/shared";
+import { formatUsd } from "@/lib/format-cost";
 
 interface RawEvent {
   t: string;
@@ -25,4 +26,11 @@ export function formatSeconds(ms: number): string {
 /** Token in→out summary (e.g. "12k→1.5k"). */
 export function formatTokens(tokensIn: number, tokensOut: number): string {
   return `${(tokensIn / 1000).toFixed(0)}k→${(tokensOut / 1000).toFixed(1)}k`;
+}
+
+/** Stat-tile cost at 2 decimals. A real sub-cent cost reads "<$0.01" so it never
+ *  looks free; "—" when unknown (incl. traces stored before cost was tracked). */
+export function formatCost(usd: number | null | undefined): string {
+  if (usd != null && usd > 0 && usd < 0.01) return "<$0.01";
+  return formatUsd(usd, 2);
 }
